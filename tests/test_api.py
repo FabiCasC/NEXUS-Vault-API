@@ -34,9 +34,10 @@ def test_form_team_endpoint_need001_no_revienta():
 
 
 def test_form_team_endpoint_devuelve_grafo_completo_cuando_hay_propuesta():
-    """Busca la primera NEED real que dé GENERADA y valida el esquema
-    exacto que espera graph_view.py de Lucía: nodes con id/type/label/
-    generated, edges con source/target/label/generated."""
+    """Busca la primera NEED real que dé GENERADA y valida el esquema EXACTO
+    que espera nexus-vault-frontend2 (services/team_api.py + graph_view.py +
+    note_panel.py): nodes con id/type/label/generado/evidencia/frase,
+    edges con source/target/weight/dashed. Nombres en español, no en inglés."""
     encontrado = False
     for i in range(1, 43):
         need_id = f"NEED-{i:03d}"
@@ -51,11 +52,16 @@ def test_form_team_endpoint_devuelve_grafo_completo_cuando_hay_propuesta():
                tipos == {"NEED", "THESIS", "RESEARCHER", "CAPABILITY", "SUBJECT", "PROP"}
 
         for n in data["nodes"]:
-            assert {"id", "type", "label", "generated"} <= n.keys()
+            assert {"id", "type", "label", "generado"} <= n.keys()
+            # los miembros institucionales (no NEED ni PROP) deben traer evidencia real
+            if n["type"] not in ("NEED", "PROP"):
+                assert n.get("evidencia") is not None
+                assert {"archivo", "id", "campo"} <= n["evidencia"].keys()
+                assert n.get("frase")  # no vacío: es la cita del CSV
 
         node_ids = {n["id"] for n in data["nodes"]}
         for e in data["edges"]:
-            assert {"source", "target", "label", "generated"} <= e.keys()
+            assert {"source", "target", "weight", "dashed"} <= e.keys()
             assert e["source"] in node_ids
             assert e["target"] in node_ids
         break

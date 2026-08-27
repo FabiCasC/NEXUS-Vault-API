@@ -4,18 +4,23 @@ Dueño: KEVIN.
 
 Traductor entre dos mundos:
   - team_formation.form_team()  -> devuelve un EQUIPO (status/team/hole/propuesta)
-  - lo que espera app.py de Lucía -> un GRAFO {root, nodes, edges}
-    (ver README de NEXUS-Vault-Frontend, sección "Contrato esperado de form_team.py")
+  - lo que espera el frontend (nexus-vault-frontend2, services/team_api.py +
+    components/note_panel.py) -> un GRAFO {nodes, edges} con esta forma EXACTA:
 
-Este archivo no inventa datos nuevos: solo re-empaqueta lo que ya devuelve
-form_team() en la forma de nodos/aristas que su graph_view.py ya sabe pintar.
+        node: {id, type, label, generado: bool, evidencia: {archivo, id, campo} | None, frase}
+        edge: {source, target, weight: float, dashed: bool}
+
+    OJO: los nombres de campo son en español (generado/evidencia/archivo/
+    campo/frase), no en inglés. Si esto vuelve a cambiar del lado del
+    frontend, este es el único archivo que hay que tocar.
 """
 
 from __future__ import annotations
 
+import hashlib
 from typing import Optional
 
-# Tipo -> nombre de archivo real del dataset (para el campo "source.file")
+# Tipo -> nombre de archivo real del dataset (para "evidencia.archivo")
 _SOURCE_FILE = {
     "NEED": "institutional_needs.csv",
     "PROJECT": "projects.csv",
@@ -43,45 +48,56 @@ def _member_node(member: dict) -> dict:
         "id": member["id"],
         "type": tipo,
         "label": member["titulo"],
-        "phrase": _member_phrase(member),
+        "frase": _member_phrase(member),
         # NOTA: aún no rastreamos en qué columna exacta cayó la pista (eso
         # requeriría que score.vectorize devuelva el nombre del campo, no
-        # solo el fragmento). Por ahora "field" queda como aproximación.
-        "source": {"file": _SOURCE_FILE.get(tipo, "?"), "id": member["id"], "field": "title"},
+        # solo el fragmento). Por ahora "campo" queda como aproximación.
+        "evidencia": {"archivo": _SOURCE_FILE.get(tipo, "?"), "id": member["id"], "campo": "title"},
         "skills": [e["skill_id"] for e in member.get("evidencias", [])],
-        "generated": False,  # los miembros del equipo son siempre piezas reales del ZIP
+        "generado": False,  # los miembros del equipo son siempre piezas reales del ZIP
     }
+
+
+def _local_id(texto: str) -> str:
+    """Id estable para una idea libre que no vino de un NEED-xxx real
+    (mismo patrón que ya usa el frontend en su propio fallback local:
+    NEED-LOCAL-<hash6>), para que dos ideas distintas no compartan id."""
+    return f"NEED-LOCAL-{hashlib.md5(texto.encode('utf-8')).hexdigest()[:6]}"
 
 
 def _need_node(query: dict) -> dict:
     need_id = query.get("need_id")
+    texto = query.get("text", "")
     node = {
-        "id": need_id or "QUERY",
+        "id": need_id or _local_id(texto),
         "type": "NEED",
-        "label": query.get("text", ""),
-        "phrase": query.get("text", ""),
-        "generated": False,
+        "label": texto,
+        "title": texto,  # app.py arma el mensaje de confirmación con .get("title")
+        "frase": texto,
+        "generado": need_id is None,  # si no vino de un NEED-xxx real, es una idea nueva
     }
     if need_id:
-        node["source"] = {"file": _SOURCE_FILE["NEED"], "id": need_id, "field": "title"}
+        node["evidencia"] = {"archivo": _SOURCE_FILE["NEED"], "id": need_id, "campo": "title"}
     return node
 
 
 def to_graph(resultado: dict) -> dict:
-    """Convierte la salida de form_team() al esquema {root, nodes, edges}
-    documentado en el README de NEXUS-Vault-Frontend."""
+    """Convierte la salida de form_team() al esquema {nodes, edges} que
+    consume services/team_api.py + components/graph_view.py + note_panel.py."""
     root_node = _need_node(resultado["query"])
     root_id = root_node["id"]
+    need_id = root_node.get("evidencia", {}).get("id")
     nodes = [root_node]
     edges = []
 
     if resultado["status"] == "INSUFICIENTE":
-        # Igual que su default.json: grafo mínimo, sin inventar conexiones.
-        return {"root": root_id, "need_id": root_node.get("source", {}).get("id"),
-                "nodes": nodes, "edges": edges, "mensaje": resultado.get("mensaje", "")}
+        # Grafo mínimo, sin inventar conexiones.
+        return {"root": root_id, "need_id": need_id, "nodes": nodes, "edges": edges,
+                "status": resultado["status"], "mensaje": resultado.get("mensaje", "")}
 
-    team_nodes = {m["tipo"]: _member_node(m) for m in resultado["team"]}
-    nodes.extend(team_nodes.values())
+    team_nodes = {m["tipo"]: (m, _member_node(m)) for m in resultado["team"]}
+    nodes.extend(node for _, node in team_nodes.values())
+    coverage = resultado["coverage_score"]
 
     if resultado["status"] == "GENERADA":
         prop = resultado["propuesta"]
@@ -90,26 +106,31 @@ def to_graph(resultado: dict) -> dict:
             "id": prop_id,
             "type": "PROP",
             "label": prop["title"],
-            "phrase": prop["question"],
-            "generated": True,
+            "frase": prop["question"],
+            "generado": True,
         })
-        edges.append({"source": root_id, "target": prop_id, "label": "cubierta por", "generated": True})
-        for tipo, node in team_nodes.items():
-            edges.append({"source": prop_id, "target": node["id"], "label": "incluye", "generated": True})
+        edges.append({"source": root_id, "target": prop_id, "weight": coverage, "dashed": True})
+        for member, node in team_nodes.values():
+            edges.append({"source": prop_id, "target": node["id"], "weight": member["relevance"], "dashed": True})
 
-    else:  # ANTECEDENTE_EXISTENTE: ya existe, no hay nada "generado"
-        antecedente = next(n for n in team_nodes.values() if n["type"] in ("PROJECT", "THESIS"))
-        edges.append({"source": root_id, "target": antecedente["id"], "label": "cubierta por", "generated": False})
-        for tipo, node in team_nodes.items():
-            if node["id"] == antecedente["id"]:
+    else:  # ANTECEDENTE_EXISTENTE: ya existe, no hay nada generado
+        antecedente_member, antecedente_node = next(
+            (m, n) for m, n in team_nodes.values() if n["type"] in ("PROJECT", "THESIS")
+        )
+        edges.append({"source": root_id, "target": antecedente_node["id"], "weight": coverage, "dashed": False})
+        for member, node in team_nodes.values():
+            if node["id"] == antecedente_node["id"]:
                 continue
-            edges.append({"source": antecedente["id"], "target": node["id"], "label": "vinculado a", "generated": False})
+            edges.append({
+                "source": antecedente_node["id"], "target": node["id"],
+                "weight": member["relevance"], "dashed": False,
+            })
 
     return {
         "root": root_id,
-        "need_id": root_node.get("source", {}).get("id"),
+        "need_id": need_id,
         "nodes": nodes,
         "edges": edges,
         "status": resultado["status"],
-        "coverage_score": resultado["coverage_score"],
+        "coverage_score": coverage,
     }
