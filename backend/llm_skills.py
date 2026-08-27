@@ -2,21 +2,21 @@
 backend/llm_skills.py
 Dueño: KEVIN (extensión sobre el diseño de "TÚ", doc 01 §4.7).
 
-Implementa "Etiquetado restringido y generación anclada" con ChatGPT
-(OpenAI) en vez de Gemini — el rol es idéntico al que describe el doc
-01_PROPUESTA_NEXUS_VAULT.docx: el LLM SOLO puede elegir skills de la lista
-cerrada del catálogo, y CADA afirmación debe venir con una cita textual
-literal del texto de origen. Si la cita no aparece tal cual en el texto,
-o el skill_id no existe en el catálogo, esa afirmación puntual se descarta
-— no se le hace ciego trust a la salida del modelo completa por completo,
-pero tampoco se tira todo el resultado por un solo error (verificación
-por afirmación, no todo-o-nada).
+Implementa "Etiquetado restringido y generación anclada": el LLM SOLO
+puede elegir skills de la lista cerrada del catálogo, y CADA afirmación
+debe venir con una cita textual literal del texto de origen. Si la cita
+no aparece tal cual en el texto, o el skill_id no existe en el catálogo,
+esa afirmación puntual se descarta (verificación por afirmación, no
+todo-o-nada).
 
-100% opcional y con fallback: si USE_LLM no está en "1" o no hay
-OPENAI_API_KEY, todo el resto del sistema sigue funcionando exactamente
-igual que antes (backend/score.py cae solo al matching por palabra clave).
-Nunca lanza una excepción hacia afuera: cualquier falla de red, cuota,
-JSON mal formado, etc. se traduce en "no hay evidencia LLM para este texto".
+Multi-proveedor con fallback automático (se prueban en este orden):
+    1. Gemini   (GEMINI_API_KEY)  — el proveedor que pedía el diseño original
+    2. ChatGPT  (OPENAI_API_KEY)  — respaldo si Gemini falla o no está configurado
+Si ambos fallan o ninguno está configurado, cae al matching por palabra
+clave de siempre (cero regresión). Nunca lanza una excepción hacia afuera.
+
+Para ver en la consola del backend cuál proveedor respondió en cada
+consulta, busca las líneas "[llm_skills] ...".
 """
 
 from __future__ import annotations
@@ -32,7 +32,8 @@ from backend.catalog import Skill, catalog
 # palabra clave, porque pasó una verificación semántica, no solo textual.
 _LLM_SCORE = 0.9
 
-_MODEL_DEFAULT = "gpt-4o-mini"
+_OPENAI_MODEL_DEFAULT = "gpt-4o-mini"
+_GEMINI_MODEL_DEFAULT = "gemini-3.6-flash"
 
 
 class LlmEvidence(TypedDict):
@@ -42,7 +43,8 @@ class LlmEvidence(TypedDict):
 
 
 def llm_enabled() -> bool:
-    return os.environ.get("USE_LLM", "0") == "1" and bool(os.environ.get("OPENAI_API_KEY"))
+    tiene_key = bool(os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY"))
+    return os.environ.get("USE_LLM", "0") == "1" and tiene_key
 
 
 def _build_prompt(texto: str, skills: List[Skill]) -> str:
@@ -89,35 +91,70 @@ def _validate_matches(raw_matches: list, texto: str, valid_ids: set) -> List[Llm
     return evidencias
 
 
+def _parse_json_matches(contenido: str) -> list:
+    data = json.loads(contenido)
+    raw_matches = data.get("matches", [])
+    return raw_matches if isinstance(raw_matches, list) else []
+
+
+def _call_gemini(texto: str, skills: List[Skill]) -> list:
+    if not os.environ.get("GEMINI_API_KEY"):
+        raise RuntimeError("GEMINI_API_KEY no configurada")
+
+    import google.generativeai as genai  # import perezoso: si no está instalado, no rompe nada
+
+    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+    modelo = os.environ.get("GEMINI_MODEL", _GEMINI_MODEL_DEFAULT)
+    model = genai.GenerativeModel(
+        modelo,
+        generation_config={"response_mime_type": "application/json"},
+    )
+    resp = model.generate_content(_build_prompt(texto, skills))
+    return _parse_json_matches(resp.text)
+
+
+def _call_openai(texto: str, skills: List[Skill]) -> list:
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise RuntimeError("OPENAI_API_KEY no configurada")
+
+    from openai import OpenAI  # import perezoso: si no está instalado, no rompe nada
+
+    client = OpenAI()  # toma OPENAI_API_KEY del entorno
+    modelo = os.environ.get("OPENAI_MODEL", _OPENAI_MODEL_DEFAULT)
+    resp = client.chat.completions.create(
+        model=modelo,
+        messages=[{"role": "user", "content": _build_prompt(texto, skills)}],
+        response_format={"type": "json_object"},
+        temperature=0,
+    )
+    return _parse_json_matches(resp.choices[0].message.content)
+
+
+# Orden de intento: Gemini primero (el proveedor del diseño original),
+# ChatGPT como respaldo si Gemini falla o no está configurado.
+_PROVEEDORES = [("gemini", _call_gemini), ("chatgpt", _call_openai)]
+
+
 def label_skills_llm(texto: str) -> List[LlmEvidence]:
     """Devuelve solo las evidencias que pasaron la verificación (id real +
-    cita literal). Lista vacía si el LLM está desactivado o falla por
-    cualquier razón — nunca revienta el flujo de team_formation."""
+    cita literal). Lista vacía si el LLM está desactivado o si TODOS los
+    proveedores configurados fallan — nunca revienta el flujo de
+    team_formation."""
     if not llm_enabled() or not (texto or "").strip():
         return []
 
     skills = catalog()
     valid_ids = {s["skill_id"] for s in skills}
 
-    try:
-        from openai import OpenAI  # import perezoso: si no está instalado, no rompe nada
+    for nombre, llamar in _PROVEEDORES:
+        try:
+            raw_matches = llamar(texto, skills)
+            evidencias = _validate_matches(raw_matches, texto, valid_ids)
+            print(f"[llm_skills] {nombre} respondió: {len(evidencias)} skill(s) verificada(s)")
+            return evidencias
+        except Exception as exc:  # red, cuota, JSON inválido, key ausente, lo que sea
+            print(f"[llm_skills] {nombre} no disponible ({exc}), probando siguiente proveedor")
+            continue
 
-        client = OpenAI()  # toma OPENAI_API_KEY del entorno
-        modelo = os.environ.get("OPENAI_MODEL", _MODEL_DEFAULT)
-
-        resp = client.chat.completions.create(
-            model=modelo,
-            messages=[{"role": "user", "content": _build_prompt(texto, skills)}],
-            response_format={"type": "json_object"},
-            temperature=0,
-        )
-        contenido = resp.choices[0].message.content
-        data = json.loads(contenido)
-        raw_matches = data.get("matches", [])
-        if not isinstance(raw_matches, list):
-            return []
-        return _validate_matches(raw_matches, texto, valid_ids)
-
-    except Exception as exc:  # red, cuota, JSON inválido, lo que sea: fallback silencioso
-        print(f"[llm_skills] LLM no disponible, sigo con matching por palabra clave: {exc}")
-        return []
+    print("[llm_skills] ningún proveedor disponible, sigo con matching por palabra clave")
+    return []

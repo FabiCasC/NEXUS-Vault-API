@@ -18,5 +18,7 @@ sobreescribe variables que ya existen en el entorno).
 import os
 
 os.environ["USE_LLM"] = "0"
+os.environ["GEMINI_API_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = ""
 os.environ["PORTAL_SECRET"] = ""
 os.environ["API_EDUCACION_SECRET"] = ""

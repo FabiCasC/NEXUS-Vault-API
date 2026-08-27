@@ -23,8 +23,55 @@ def _fake_openai_response(matches: list) -> MagicMock:
 def test_llm_disabled_por_defecto(monkeypatch):
     monkeypatch.delenv("USE_LLM", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     assert llm_skills.llm_enabled() is False
     assert llm_skills.label_skills_llm("cualquier texto") == []
+
+
+def test_gemini_responde_primero_si_esta_configurado(monkeypatch):
+    monkeypatch.setenv("USE_LLM", "1")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    skill_real = catalog()[0]["skill_id"]
+    texto = "La institución necesita fortalecer la permanencia estudiantil urgentemente."
+
+    fake_model = MagicMock()
+    fake_model.generate_content.return_value = MagicMock(
+        text=json.dumps({"matches": [{"skill_id": skill_real, "cita": "permanencia estudiantil"}]})
+    )
+    fake_genai = MagicMock()
+    fake_genai.GenerativeModel.return_value = fake_model
+
+    with patch.dict("sys.modules", {"google.generativeai": fake_genai}):
+        evidencias = llm_skills.label_skills_llm(texto)
+
+    assert len(evidencias) == 1
+    assert evidencias[0]["skill_id"] == skill_real
+
+
+def test_cae_a_chatgpt_si_gemini_falla(monkeypatch):
+    monkeypatch.setenv("USE_LLM", "1")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake-para-test")
+
+    skill_real = catalog()[0]["skill_id"]
+    texto = "La institución necesita fortalecer la permanencia estudiantil urgentemente."
+
+    fake_genai = MagicMock()
+    fake_genai.configure.side_effect = RuntimeError("Gemini caído")
+
+    fake_openai_client = MagicMock()
+    fake_openai_client.chat.completions.create.return_value = _fake_openai_response(
+        [{"skill_id": skill_real, "cita": "permanencia estudiantil"}]
+    )
+
+    with patch.dict("sys.modules", {"google.generativeai": fake_genai}), \
+         patch("openai.OpenAI", return_value=fake_openai_client):
+        evidencias = llm_skills.label_skills_llm(texto)
+
+    assert len(evidencias) == 1
+    assert evidencias[0]["skill_id"] == skill_real
 
 
 def test_llm_requiere_use_llm_y_api_key(monkeypatch):
