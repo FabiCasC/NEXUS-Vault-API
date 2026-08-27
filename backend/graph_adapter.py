@@ -105,8 +105,10 @@ def to_graph(resultado: dict) -> dict:
         nodes.append({
             "id": prop_id,
             "type": "PROP",
-            "label": prop["title"],
-            "frase": prop["question"],
+            # Etiqueta corta a propósito: el título completo (largo) se ve
+            # al hacer clic (nota), no compite por espacio en el grafo.
+            "label": "🔮 Propuesta generada",
+            "frase": f"{prop['title']}. {prop['question']}",
             "generado": True,
         })
         edges.append({"source": root_id, "target": prop_id, "weight": coverage, "dashed": True})
