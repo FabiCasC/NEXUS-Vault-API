@@ -50,6 +50,13 @@ def skill_score(texto: str, skill: dict) -> Tuple[float, str]:
 def vectorize(texto: str) -> Tuple[Dict[str, float], List[Evidence]]:
     """YO-B3: vector s (o t si el texto es una necesidad) de largo K,
     más la lista de evidencias con score > 0 (citas obligatorias, doc 01 §4.7).
+
+    Si USE_LLM=1 y hay OPENAI_API_KEY (ver backend/llm_skills.py), se suma
+    también lo que el LLM encuentre —con cita verificada contra el texto—
+    para las skills que el matching por palabra clave no detectó. Nunca
+    reemplaza una evidencia por palabra clave ya encontrada; solo rellena
+    huecos. Si el LLM está apagado o falla, el comportamiento es idéntico
+    al de antes (cero regresión).
     """
     vec: Dict[str, float] = {}
     evidencias: List[Evidence] = []
@@ -58,6 +65,18 @@ def vectorize(texto: str) -> Tuple[Dict[str, float], List[Evidence]]:
         vec[skill["skill_id"]] = score
         if score > 0:
             evidencias.append({"skill_id": skill["skill_id"], "score": score, "fragmento": fragmento})
+
+    if any(v == 0 for v in vec.values()):
+        from backend.llm_skills import llm_enabled, label_skills_llm
+
+        if llm_enabled():
+            for llm_ev in label_skills_llm(texto):
+                skill_id = llm_ev["skill_id"]
+                if vec.get(skill_id, 0) > 0:
+                    continue  # ya evidenciado por palabra clave, no lo pisamos
+                vec[skill_id] = llm_ev["score"]
+                evidencias.append(llm_ev)
+
     return vec, evidencias
 
 

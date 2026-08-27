@@ -20,6 +20,10 @@ graph_view.py sabe pintar (ver backend/graph_adapter.py).
 
 from typing import Optional
 
+from dotenv import load_dotenv
+
+load_dotenv()  # lee .env si existe (USE_LLM, OPENAI_API_KEY, DATA_DIR...) antes de cargar el resto
+
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 

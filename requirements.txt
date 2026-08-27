@@ -2,8 +2,9 @@ pandas>=2.0
 pytest>=8.0
 fastapi>=0.110
 uvicorn>=0.29
+openai>=1.30
+python-dotenv>=1.0
 
 # Lo de abajo lo necesita el catálogo/score definitivo de "TÚ" (embeddings,
 # doc 01 sección 4.6) y el frontend de Lucía (eso vive en su propio repo).
 # sentence-transformers>=2.2
-# google-generativeai
