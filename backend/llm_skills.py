@@ -35,6 +35,11 @@ _LLM_SCORE = 0.9
 _OPENAI_MODEL_DEFAULT = "gpt-4o-mini"
 _GEMINI_MODEL_DEFAULT = "gemini-3.6-flash"
 
+# Tope por proveedor: si Gemini se cuelga y hay que caer a ChatGPT, el total
+# no debe superar esto x2 (~16s) — el frontend debe configurar su propio
+# timeout HTTP por encima de ese peor caso (ver README de NEXUS-Vault-Frontend).
+_PROVIDER_TIMEOUT_SECONDS = 8
+
 
 class LlmEvidence(TypedDict):
     skill_id: str
@@ -109,7 +114,10 @@ def _call_gemini(texto: str, skills: List[Skill]) -> list:
         modelo,
         generation_config={"response_mime_type": "application/json"},
     )
-    resp = model.generate_content(_build_prompt(texto, skills))
+    resp = model.generate_content(
+        _build_prompt(texto, skills),
+        request_options={"timeout": _PROVIDER_TIMEOUT_SECONDS},
+    )
     return _parse_json_matches(resp.text)
 
 
@@ -126,6 +134,7 @@ def _call_openai(texto: str, skills: List[Skill]) -> list:
         messages=[{"role": "user", "content": _build_prompt(texto, skills)}],
         response_format={"type": "json_object"},
         temperature=0,
+        timeout=_PROVIDER_TIMEOUT_SECONDS,
     )
     return _parse_json_matches(resp.choices[0].message.content)
 
