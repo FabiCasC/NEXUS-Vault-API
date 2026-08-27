@@ -28,6 +28,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.graph_adapter import to_graph
+from backend.portal_client import publish_activity
 from backend.team_formation import form_team
 
 app = FastAPI(title="NEXUS Vault API", version="0.1")
@@ -56,4 +57,18 @@ def form_team_endpoint(
     if not query:
         return {"error": "Manda need_id (ej. NEED-001) o free_text en la URL."}
     resultado = form_team(query)
-    return to_graph(resultado)
+    grafo = to_graph(resultado)
+
+    if resultado["status"] == "GENERADA":
+        # Actividad institucional en vivo (Portal). Efecto secundario:
+        # si falla, no afecta la respuesta que recibe el frontend.
+        publish_activity(
+            "propuesta_generada",
+            {
+                "need": grafo.get("need_id") or grafo.get("root"),
+                "titulo": resultado["propuesta"]["title"],
+                "coverage_score": resultado["coverage_score"],
+            },
+        )
+
+    return grafo

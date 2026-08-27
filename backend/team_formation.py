@@ -311,7 +311,10 @@ def form_team(
         need_text = query
         need_title = query
 
-    need_vector, need_evidencias = score_mod.vectorize(need_text)
+    # use_llm=True SOLO aquí: 1 llamada por consulta, nunca por candidato
+    # (candidatos() vectoriza ~1300 filas del dataset y debe quedarse en
+    # matching por palabra clave, o el costo/latencia se dispara).
+    need_vector, need_evidencias = score_mod.vectorize(need_text, use_llm=True)
 
     resultado = armar_canasta(need_vector, core, extra, top_n=top_n)
     cands = resultado["cands"]

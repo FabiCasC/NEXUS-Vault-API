@@ -46,15 +46,27 @@ def llm_enabled() -> bool:
 
 
 def _build_prompt(texto: str, skills: List[Skill]) -> str:
-    catalogo_txt = "\n".join(f"- {s['skill_id']}: {s['nombre']}" for s in skills)
+    # Incluir las "pistas" (no solo el nombre) le da al modelo contexto real
+    # de qué cubre cada skill, para que razone semánticamente (ej. relacionar
+    # "predicción de riesgo" con analítica de datos) y no solo repita
+    # coincidencias literales de palabra — que es justo lo que ya hace el
+    # matching por keyword y lo que este paso está para complementar.
+    catalogo_txt = "\n".join(
+        f"- {s['skill_id']}: {s['nombre']} (ejemplos de lo que cubre: {', '.join(s['pistas'])})"
+        for s in skills
+    )
     return (
         "Eres un clasificador de habilidades institucionales. Tienes una lista "
         "CERRADA de habilidades y un texto. Identifica cuáles de esas habilidades "
-        "(y SOLO esas, no inventes otras) están evidenciadas en el texto.\n\n"
+        "(y SOLO esas, no inventes otras) están evidenciadas en el texto, aunque "
+        "el texto use palabras distintas a las de la lista (ej. 'predicción de "
+        "riesgo académico' puede evidenciar una habilidad de analítica de datos, "
+        "aunque el texto no diga 'analítica' ni 'datos' literalmente).\n\n"
         "Reglas estrictas:\n"
         "1. Solo puedes usar skill_id que aparezcan en la lista de abajo.\n"
         "2. Para cada habilidad que elijas, cita el fragmento EXACTO del texto "
-        "(copiado literal, sin parafrasear) que la sustenta.\n"
+        "(copiado literal, sin parafrasear) que la sustenta — el fragmento citado "
+        "puede sustentar más de una habilidad a la vez si aplica a varias.\n"
         "3. Si ninguna habilidad aplica, responde con una lista vacía.\n"
         "4. Responde SOLO JSON válido, sin texto adicional, con este formato:\n"
         '   {"matches": [{"skill_id": "SK_X", "cita": "fragmento literal del texto"}]}\n\n'
