@@ -79,6 +79,7 @@ def publish_activity(event_type: str, content: Dict[str, Any], sender_id: str = 
         if not resp.ok:
             print(f"[portal_client] Portal respondió {resp.status_code}: {resp.text[:200]}")
             return False
+        print(f"[portal_client] publicado en canal '{cfg['channel_id']}': {event_type}")
         return True
     except requests.RequestException as exc:
         print(f"[portal_client] No se pudo publicar en Portal (sigue la demo igual): {exc}")
