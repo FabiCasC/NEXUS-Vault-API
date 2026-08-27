@@ -1,0 +1,10 @@
+pandas>=2.0
+pytest>=8.0
+
+# Lo de abajo lo necesita el catálogo/score definitivo de "TÚ" (embeddings,
+# doc 01 sección 4.6) y el frontend de Lucía. Los deja comentados porque
+# backend/load_core.py y backend/team_formation.py (KEVIN) NO los requieren.
+# sentence-transformers>=2.2
+# streamlit>=1.30
+# streamlit-agraph
+# google-generativeai
